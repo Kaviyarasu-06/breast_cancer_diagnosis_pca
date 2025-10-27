@@ -55,6 +55,16 @@ def main():
     feature_names = art['feature_names']
     feature_means = art.get('feature_means', {})
     target_mapping = art.get('target_mapping', {0: 'Benign', 1: 'Malignant'})
+    # If the artifact contains individual components instead of a single pipeline,
+    # we'll use them to construct a prediction path.
+    components_mode = False
+    if pipeline is None and 'svc' in art:
+        components_mode = True
+        pt = art.get('pt')
+        scaler = art.get('scaler')
+        pca = art.get('pca')
+        svc = art.get('svc')
+        skewed_features = art.get('skewed_features', [])
 
     st.sidebar.header('Input features')
     inputs = {}
@@ -65,8 +75,18 @@ def main():
 
     if st.sidebar.button('Predict'):
         df_input = pd.DataFrame([inputs], columns=feature_names)
-        pred = pipeline.predict(df_input)
-        proba = pipeline.predict_proba(df_input) if hasattr(pipeline, 'predict_proba') else None
+        if components_mode:
+            # Apply the same transforms as during training
+            X = df_input.copy()
+            if len(skewed_features) > 0 and pt is not None:
+                X[skewed_features] = pt.transform(X[skewed_features])
+            X_scaled = scaler.transform(X)
+            X_pca = pca.transform(X_scaled)
+            pred = svc.predict(X_pca)
+            proba = svc.predict_proba(X_pca) if hasattr(svc, 'predict_proba') else None
+        else:
+            pred = pipeline.predict(df_input)
+            proba = pipeline.predict_proba(df_input) if hasattr(pipeline, 'predict_proba') else None
 
         label = target_mapping.get(int(pred[0]), str(pred[0]))
         st.subheader('Prediction')

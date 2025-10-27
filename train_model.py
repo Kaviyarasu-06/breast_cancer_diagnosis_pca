@@ -4,9 +4,7 @@ from joblib import dump as joblib_dump
 
 import numpy as np
 import pandas as pd
-from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA
-from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import PowerTransformer, StandardScaler
 from sklearn.svm import SVC
 from sklearn.model_selection import train_test_split
@@ -50,31 +48,59 @@ def build_and_train(df, save_path='model_pipeline.pkl'):
         'compactness_worst', 'concavity_worst', 'symmetry_worst', 'fractal_dimension_worst'
     ]
 
-    # ColumnTransformer: apply Yeo-Johnson to skewed features, leave others as-is
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ("pt", PowerTransformer(method='yeo-johnson', standardize=False), skewed_features),
-        ],
-        remainder='passthrough',
-        sparse_threshold=0
-    )
+    # Instead of using ColumnTransformer (which can cause cross-version pickle issues),
+    # we fit the PowerTransformer, StandardScaler, PCA and SVC separately and save them
+    # individually. This makes loading in different environments more robust.
 
-    # Full pipeline: preprocessor -> scaler -> PCA -> SVC
-    pipeline = Pipeline([
-        ('pre', preprocessor),
-        ('scaler', StandardScaler()),
-        ('pca', PCA(n_components=6)),
-        ('svc', SVC(kernel='rbf', probability=True, random_state=42))
-    ])
+    pt = PowerTransformer(method='yeo-johnson', standardize=False)
 
     # Train/test split
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
-    # Fit pipeline
-    pipeline.fit(X_train, y_train)
+    # Fit PowerTransformer on skewed features using training data
+    pt.fit(X_train[skewed_features])
+
+    # Apply transformation to full training set
+    X_train_trans = X_train.copy()
+    X_train_trans[skewed_features] = pt.transform(X_train[skewed_features])
+
+    # Fit scaler on transformed training set
+    scaler = StandardScaler()
+    scaler.fit(X_train_trans)
+
+    # Scale training data
+    X_train_scaled = scaler.transform(X_train_trans)
+
+    # Fit PCA on scaled training data
+    pca = PCA(n_components=6)
+    pca.fit(X_train_scaled)
+
+    X_train_pca = pca.transform(X_train_scaled)
+
+    # Fit SVC
+    svc = SVC(kernel='rbf', probability=True, random_state=42)
+    svc.fit(X_train_pca, y_train)
+
+    # For convenience, assemble a pipeline-like object for local use (but we won't pickle ColumnTransformer)
+    try:
+        from sklearn.pipeline import Pipeline
+        pipeline = Pipeline([
+            ('pt_passthrough', pt),
+            ('scaler', scaler),
+            ('pca', pca),
+            ('svc', svc)
+        ])
+    except Exception:
+        pipeline = None
+
+    # Prepare test set using the same manual transforms
+    X_test_trans = X_test.copy()
+    X_test_trans[skewed_features] = pt.transform(X_test_trans[skewed_features])
+    X_test_scaled = scaler.transform(X_test_trans)
+    X_test_pca = pca.transform(X_test_scaled)
 
     # Evaluate
-    y_pred = pipeline.predict(X_test)
+    y_pred = svc.predict(X_test_pca)
     acc = accuracy_score(y_test, y_pred)
     print(f"Accuracy: {acc:.4f}")
     print('\nClassification Report:\n', classification_report(y_test, y_pred))
@@ -82,11 +108,18 @@ def build_and_train(df, save_path='model_pipeline.pkl'):
 
     # Save pipeline + metadata
     model_artifact = {
-        'pipeline': pipeline,
+        # Individual components
+        'pt': pt,
+        'scaler': scaler,
+        'pca': pca,
+        'svc': svc,
+        'pipeline': pipeline,  # may be None on some envs
+        'skewed_features': skewed_features,
         'feature_names': X.columns.tolist(),
         'feature_means': X.mean().to_dict(),
         'target_mapping': {0: 'Benign', 1: 'Malignant'}
     }
+
     with open(save_path, 'wb') as f:
         pickle.dump(model_artifact, f)
 
