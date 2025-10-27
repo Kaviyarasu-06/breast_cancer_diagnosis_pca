@@ -3,8 +3,36 @@ import pandas as pd
 import streamlit as st
 
 
-@st.cache_resource
 def load_model(path='model_pipeline.pkl'):
+    """Try to load the saved model artifact. Attempt joblib first then pickle. Returns the artifact dict or raises.
+
+    We avoid caching here to make error reporting simpler on deployment platforms.
+    """
+    # Import common ML packages early to help unpickling on some platforms
+    try:
+        import sklearn  # noqa: F401
+        import numpy as np  # noqa: F401
+    except Exception:
+        # non-fatal here; we'll still try to load and let pickle/joblib raise helpful errors
+        pass
+
+    # Try joblib first (safe for sklearn objects), then fallback to pickle
+    try:
+        from joblib import load as joblib_load
+    except Exception:
+        joblib_load = None
+
+    if joblib_load is not None:
+        try:
+            return joblib_load(path.replace('.pkl', '.joblib'))
+        except FileNotFoundError:
+            # joblib file not present — fall back to pickle
+            pass
+        except Exception:
+            # if joblib exists but fails, continue to try pickle and show full error later
+            pass
+
+    # Fallback to pickle
     with open(path, 'rb') as f:
         return pickle.load(f)
 
@@ -17,6 +45,10 @@ def main():
         art = load_model('model_pipeline.pkl')
     except FileNotFoundError:
         st.error("Model file 'model_pipeline.pkl' not found. Run 'python train_model.py' first to create it.")
+        return
+    except Exception as e:
+        st.error("Failed to load model artifact. See exception below for details.")
+        st.exception(e)
         return
 
     pipeline = art['pipeline']

@@ -1,5 +1,6 @@
 import os
 import pickle
+from joblib import dump as joblib_dump
 
 import numpy as np
 import pandas as pd
@@ -88,6 +89,14 @@ def build_and_train(df, save_path='model_pipeline.pkl'):
     }
     with open(save_path, 'wb') as f:
         pickle.dump(model_artifact, f)
+
+    # Also save a joblib copy which is often more robust for sklearn objects on cloud platforms
+    joblib_path = save_path.replace('.pkl', '.joblib')
+    try:
+        joblib_dump(model_artifact, joblib_path)
+        print(f"Saved joblib model artifact to '{joblib_path}'")
+    except Exception as e:
+        print(f"Could not save joblib artifact: {e}")
 
     print(f"Saved model pipeline and metadata to '{save_path}'")
 
